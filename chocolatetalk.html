@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChocolateTalk Ultimate Client</title>
+    <style>
+        :root {
+            --primary-color: #4a2c11; /* 초콜릿 색상 */
+            --accent-color: #ffeb33;  /* 카카오 느낌 노란색 포인트 */
+            --bg-color: #f5f5f5;
+            --chat-bg: #bacfb2;       /* 카카오톡 전통 대화방 배경색 */
+        }
+        body { font-family: 'Malgun Gothic', sans-serif; margin: 0; padding: 0; background: var(--bg-color); display: flex; height: 100vh; }
+        #app-container { display: flex; width: 100%; height: 100%; }
+        
+        /* 사이드바: 유저 및 통화 제어 */
+        .sidebar { width: 320px; background: var(--primary-color); color: white; padding: 20px; display: flex; flex-direction: column; gap: 20px; box-shadow: 2px 0 10px rgba(0,0,0,0.2); }
+        .sidebar h2 { margin: 0; color: var(--accent-color); font-size: 22px; text-shadow: 1px 1px 2px #000; }
+        .btn { background: var(--accent-color); color: #111; border: none; padding: 12px; border-radius: 8px; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        .btn:hover { background: #e6d22e; transform: translateY(-1px); }
+        .btn-danger { background: #ff4d4d; color: white; }
+        .btn-danger:hover { background: #cc3333; }
+        .voice-panel { background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); }
+        
+        /* 메인 채팅창 */
+        .chat-area { flex: 1; display: flex; flex-direction: column; background: var(--chat-bg); }
+        .chat-header { background: rgba(0,0,0,0.05); padding: 15px 20px; font-weight: bold; font-size: 18px; border-bottom: 1px solid rgba(0,0,0,0.1); }
+        .messages-container { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
+        
+        /* 말풍선 스타일링 */
+        .msg-bubble { max-width: 65%; padding: 10px 14px; border-radius: 12px; font-size: 15px; line-height: 1.4; word-break: break-all; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+        .msg-receive { background: white; align-self: flex-start; border-top-left-radius: 0; }
+        .msg-send { background: var(--accent-color); align-self: flex-end; border-top-right-radius: 0; }
+        
+        /* 유튜브 카드 임베드 스타일 */
+        .youtube-card { margin-top: 8px; border-radius: 8px; overflow: hidden; background: #000; box-shadow: 0 4px 6px rgba(0,0,0,0.15); }
+        .youtube-card iframe { display: block; border: none; }
+
+        /* 입력창 영역 */
+        .input-area { padding: 15px; background: white; display: flex; gap: 10px; border-top: 1px solid #ddd; }
+        .input-area input { flex: 1; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 15px; outline: none; }
+        .input-area input:focus { border-color: var(--primary-color); }
+        
+        /* 숨김 오디오 태그 */
+        audio { display: none; }
+    </style>
+</head>
+<body>
+
+<div id="app-container">
+    <div class="sidebar">
+        <h2>🍫 ChocolateTalk</h2>
+        <div id="user-info">내 아이디: <b id="my-id">연결 중...</b></div>
+        <hr style="width:100%; border:0; border-top:1px solid rgba(255,255,255,0.2);">
+        
+        <div class="voice-panel">
+            <h3>📞 VoiceTalk (WebRTC)</h3>
+            <input type="text" id="call-id-input" placeholder="통화방 ID 입력 또는 생성" style="width:90%; padding:8px; margin-bottom:10px; border-radius:4px; border:none;"><br>
+            <button class="btn" id="btn-create-call" style="width:100%; margin-bottom:5px;">1. 통화방 개설</button>
+            <button class="btn" id="btn-join-call" style="width:100%; background:#4caf50; color:white;">2. 통화방 입장</button>
+            <button class="btn btn-danger" id="btn-hangup" style="width:100%; margin-top:5px;" disabled>통화 종료</button>
+        </div>
+
+        <div class="voice-panel">
+            <h3>🎙️ 음성 녹음 기능</h3>
+            <button class="btn" id="btn-record-start" style="background:#ff9800; color:white; width:100%; margin-bottom:5px;">녹음 시작</button>
+            <button class="btn btn-danger" id="btn-record-stop" style="width:100%;" disabled>녹음 중지 및 전송</button>
+        </div>
+    </div>
+
+    <div class="chat-area">
+        <div class="chat-header">글로벌 오픈 대화방 (YouTube 링크 지원)</div>
+        <div class="messages-container" id="msg-container">
+            </div>
+        <div class="input-area">
+            <input type="text" id="chat-input" placeholder="메시지를 입력하세요... (유튜브 주소를 넣으면 화면에 플레이어가 뜹니다)">
+            <button class="btn" id="btn-send-msg" style="width: 80px;">전송</button>
+        </div>
+    </div>
+</div>
+
+<audio id="remote-audio" autoplay controls></audio>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getFirestore, collection, doc, setDoc, addDoc, onSnapshot, getDoc, updateDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+    import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
+
+    // 1. Firebase 설정 객체 (기존 제공해주신 키 바인딩)
+    const firebaseConfig = {
+        apiKey: "AIzaSyA9gRbHEiwMbC39S-2VFpOPUPv0fS0A34I",
+        authDomain: "chocolatetalk-2c42c.firebaseapp.com",
+        projectId: "chocolatetalk-2c42c",
+        storageBucket: "chocolatetalk-2c42c.firebasestorage.app",
+        messagingSenderId: "78306717954",
+        appId: "1:78306717954:web:77db934c4393df26d1521b",
+        measurementId: "G-83DHB0VHB4"
+    };
+
+    // Firebase 인스턴스 활성화
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const storage = getStorage(app);
+
+    // 전역 변수 설정 (유저 ID 임의 생성)
+    const myUserId = "User_" + Math.floor(Math.random() * 10000);
+    document.getElementById('my-id').innerText = myUserId;
+
+    // WebRTC용 글로벌 STUN 서버 설정 (P2P 연결 통로 개척용 공용 서버)
+    const iceServers = {
+        iceServers: [
+            { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }
+        ],
+        iceCandidatePoolSize: 10,
+    };
+
+    let localStream = null;
+    let remoteStream = null;
+    let peerConnection = null;
+    let mediaRecorder = null;
+    let audioChunks = [];
+
+    /* ====================================================================
+       CORE FEATURE 1: 유튜브 URL 정규식 판별 및 파싱 로직
+       ==================================================================== */
+    function extractYouTubeId(url) {
+        const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+        const match = url.match(regExp);
+        return (match && match[2].length === 11) ? match[2] : null;
+    }
+
+    /* ====================================================================
+       CORE FEATURE 2: 텍스트 및 미디어 메시지 실시간 렌더링
+       ==================================================================== */
+    const msgContainer = document.getElementById('msg-container');
+
+    function renderMessage(data) {
+        const isMe = data.sender === myUserId;
+        const bubble = document.createElement('div');
+        bubble.classList.add('msg-bubble', isMe ? 'msg-send' : 'msg-receive');
+        
+        // 일반 텍스트 처리 및 보호
+        bubble.innerText = `[${data.sender}] : ${data.text}`;
+
+        // 만약 메시지 내에 유튜브 주소가 포함되어 있다면 아이프레임 카드 추가
+        const ytId = extractYouTubeId(data.text);
+        if(ytId) {
+            const card = document.createElement('div');
+            card.classList.add('youtube-card');
+            card.innerHTML = `
+                <iframe width="100%" height="200" src="https://www.youtube.com/embed/${ytId}" 
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen>
+                </iframe>`;
+            bubble.appendChild(card);
+        }
+
+        // 만약 음성 녹음 파일(스토리지 URL)이 포함되어 있다면 오디오 플레이어 추가
+        if(data.audioUrl) {
+            const audioPlayer = document.createElement('audio');
+            audioPlayer.src = data.audioUrl;
+            audioPlayer.controls = true;
+            audioPlayer.style.display = "block";
+            audioPlayer.style.marginTop = "10px";
+            bubble.appendChild(audioPlayer);
+        }
+
+        msgContainer.appendChild(bubble);
+        msgContainer.scrollTop = msgContainer.scrollHeight; // 스크롤 하단 고정
+    }
+
+    // Firestore에서 실시간으로 대화 내용 수신 리스닝 (디스코드/카톡 동기화)
+    onSnapshot(collection(db, "chats"), (snapshot) => {
+        msgContainer.innerHTML = ''; // 재생성 대비 초기화
+        let sortedDocs = snapshot.docs.map(doc => doc.data()).sort((a,b) => a.timestamp - b.timestamp);
+        sortedDocs.forEach(msg => renderMessage(msg));
+    });
+
+    // 메시지 전송 버튼 이벤트
+    document.getElementById('btn-send-msg').addEventListener('click', async () => {
+        const input = document.getElementById('chat-input');
+        if(!input.value.trim()) return;
+
+        await addDoc(collection(db, "chats"), {
+            sender: myUserId,
+            text: input.value,
+            timestamp: Date.now()
+        });
+        input.value = '';
+    });
+
+    /* ====================================================================
+       CORE FEATURE 3: WebRTC 기반 1:1 보이스톡 시그널링 (개설/참여)
+       ==================================================================== */
+    const callInput = document.getElementById('call-id-input');
+    
+    // 1번 사용자가 방을 파는 로직 (Offer 생성)
+    document.getElementById('btn-create-call').addEventListener('click', async () => {
+        peerConnection = new RTCPeerConnection(iceServers);
+        
+        // 내 컴퓨터 마이크 권한 획득
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        remoteStream = new MediaStream();
+
+        // 내 음성 트랙을 연결 객체에 탑재
+        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+        // 상대방 음성 스트랙이 오면 브라우저 오디오 객체에 연결
+        peerConnection.ontrack = event => {
+            event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
+        };
+        document.getElementById('remote-audio').srcObject = remoteStream;
+
+        // Firebase에 통화 시그널 주소 문서 생성
+        const callDoc = doc(collection(db, "calls"));
+        callInput.value = callDoc.id; // 방 아이디 표시
+
+        const offerCandidates = collection(callDoc, "offerCandidates");
+        const answerCandidates = collection(callDoc, "answerCandidates");
+
+        // 나의 ICE 네트워크 통신 주소 후보들을 발굴할 때마다 Firestore에 실시간 기록
+        peerConnection.onicecandidate = event => {
+            if(event.candidate) addDoc(offerCandidates, event.candidate.toJSON());
+        };
+
+        // 전화를 걸기 위한 통신 제안(Offer) 생성 및 등록
+        const offerDescription = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offerDescription);
+
+        await setDoc(callDoc, { offer: { type: offerDescription.type, sdp: offerDescription.sdp } });
+
+        // 상대방(2번 유저)이 수락(Answer) 주소를 등록하는지 실시간 감시
+        onSnapshot(callDoc, (snapshot) => {
+            const data = snapshot.data();
+            if (!peerConnection.currentRemoteDescription && data?.answer) {
+                const answerDescription = new RTCSessionDescription(data.answer);
+                peerConnection.setRemoteDescription(answerDescription);
+            }
+        });
+
+        // 상대방의 ICE 주소 정보도 실시간 수신 연동
+        onSnapshot(answerCandidates, snapshot => {
+            snapshot.docChanges().forEach(change => {
+                if (change.type === 'added') {
+                    const candidate = new RTCIceCandidate(change.doc.data());
+                    peerConnection.addIceCandidate(candidate);
+                }
+            });
+        });
+
+        document.getElementById('btn-hangup').disabled = false;
+        alert("보이스톡 방 개설 성공! 아이디를 친구에게 공유하세요.");
+    });
+
+    // 2번 사용자가 방 아이디를 넣고 입장하는 로직 (Answer 생성)
+    document.getElementById('btn-join-call').addEventListener('click', async () => {
+        const callId = callInput.value;
+        if(!callId) return alert("방 ID를 입력하세요.");
+
+        const callDoc = doc(db, "calls", callId);
+        const callData = (await getDoc(callDoc)).data();
+
+        if(!callData) return alert("존재하지 않는 통화방입니다.");
+
+        peerConnection = new RTCPeerConnection(iceServers);
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        remoteStream = new MediaStream();
+
+        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+        peerConnection.ontrack = event => {
+            event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
+        };
+        document.getElementById('remote-audio').srcObject = remoteStream;
+
+        const offerCandidates = collection(callDoc, "offerCandidates");
+        const answerCandidates = collection(callDoc, "answerCandidates");
+
+        peerConnection.onicecandidate = event => {
+            if(event.candidate) addDoc(answerCandidates, event.candidate.toJSON());
+        };
+
+        // 1번 유저가 보낸 제안(Offer) 수락 설정
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(callData.offer));
+        
+        // 답변(Answer) 주소 생성 및 내 정보 등록
+        const answerDescription = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answerDescription);
+        await updateDoc(callDoc, { answer: { type: answerDescription.type, sdp: answerDescription.sdp } });
+
+        // 1번 유저의 ICE 주소 목록 동기화
+        onSnapshot(offerCandidates, snapshot => {
+            snapshot.docChanges().forEach(change => {
+                if (change.type === 'added') {
+                    peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+                }
+            });
+        });
+
+        document.getElementById('btn-hangup').disabled = false;
+        alert("보이스톡 연결 완료! 대화를 시작하세요.");
+    });
+
+    // 통화 종료 기능
+    document.getElementById('btn-hangup').addEventListener('click', () => {
+        if(peerConnection) peerConnection.close();
+        if(localStream) localStream.getTracks().forEach(track => track.stop());
+        document.getElementById('btn-hangup').disabled = true;
+        alert("통화가 정상적으로 종료되었습니다.");
+    });
+
+
+    /* ====================================================================
+       CORE FEATURE 4: 마이크 음성 녹음 및 Firebase Cloud Storage 전송
+       ==================================================================== */
+    const startRecordBtn = document.getElementById('btn-record-start');
+    const stopRecordBtn = document.getElementById('btn-record-stop');
+
+    startRecordBtn.addEventListener('click', async () => {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = event => {
+            audioChunks.push(event.data);
+        };
+
+        mediaRecorder.onstop = async () => {
+            const audioBlob = new Blob(audioChunks, { type: 'audio/mp3' });
+            const fileRef = ref(storage, `voice_talks/${Date.now()}_record.mp3`);
+            
+            // Firebase Storage에 녹음 바이너리 파일 업로드
+            alert("음성 파일 업로드 시작...");
+            const uploadResult = await uploadBytes(fileRef, audioBlob);
+            const downloadUrl = await getDownloadURL(uploadResult.ref);
+
+            // 업로드가 완료되면 대화방에 파일 주소 바인딩하여 전송
+            await addDoc(collection(db, "chats"), {
+                sender: myUserId,
+                text: "🎙️ 음성 메시지를 보냈습니다.",
+                audioUrl: downloadUrl,
+                timestamp: Date.now()
+            });
+        };
+
+        mediaRecorder.start();
+        startRecordBtn.disabled = true;
+        stopRecordBtn.disabled = false;
+    });
+
+    stopRecordBtn.addEventListener('click', () => {
+        mediaRecorder.stop();
+        mediaRecorder.stream.getTracks().forEach(track => track.stop()); // 마이크 자원 반환
+        startRecordBtn.disabled = false;
+        stopRecordBtn.disabled = true;
+    });
+</script>
+</body>
+</html>
